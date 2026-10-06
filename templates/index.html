@@ -499,6 +499,81 @@
         pointer-events: none;
     }
 
+    /* ---------- Rooms: topbar chip + gate fields ---------- */
+    .top-right { display: flex; align-items: center; gap: 14px; }
+    .room-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-family: var(--font-mono);
+        font-size: 11px;
+        letter-spacing: 1.26px;
+        text-transform: uppercase;
+        color: rgba(255, 255, 255, 0.7);
+        background: var(--glass-strong);
+        border: 1px solid rgba(255, 255, 255, 0.15);
+        border-radius: var(--r-pill);
+        padding: 5px 12px;
+        cursor: pointer;
+        transition: all .3s var(--ease-expo);
+    }
+    .room-chip:hover { color: #fff; border-color: rgba(255, 255, 255, 0.4); box-shadow: var(--glow-white); }
+    .room-chip.copied { color: #000; background: #fff; border-color: #fff; }
+
+    .gate-field { text-align: left; margin-bottom: 14px; }
+    .gate-field label {
+        display: block;
+        font-family: var(--font-mono);
+        font-size: 10px;
+        letter-spacing: 1.5px;
+        text-transform: uppercase;
+        color: rgba(255, 255, 255, 0.4);
+        margin-bottom: 7px;
+    }
+    .room-input {
+        flex: 1;
+        height: 46px;
+        background: rgba(255, 255, 255, 0.035);
+        border: 1px solid rgba(255, 255, 255, 0.2);
+        border-radius: var(--r-pill);
+        color: #fff;
+        font-family: var(--font-mono);
+        font-size: 15px;
+        font-weight: 600;
+        letter-spacing: 2px;
+        text-transform: uppercase;
+        padding: 0 18px;
+        outline: none;
+    }
+    .room-input:focus { border-color: rgba(255, 255, 255, 0.45); }
+    .room-input::placeholder { color: rgba(255, 255, 255, 0.22); letter-spacing: 1px; font-weight: 400; }
+    .gen-btn {
+        width: 46px; height: 46px;
+        flex: 0 0 46px;
+        border-radius: var(--r-pill);
+        border: 1px solid rgba(255, 255, 255, 0.2);
+        background: var(--glass);
+        color: rgba(255, 255, 255, 0.85);
+        display: grid;
+        place-items: center;
+        cursor: pointer;
+        transition: transform .5s var(--ease-expo), background .3s, border-color .3s;
+    }
+    .gen-btn:hover { background: var(--glass-strong); border-color: rgba(255, 255, 255, 0.4); transform: rotate(-12deg); }
+
+    .gate-error {
+        font-family: var(--font-mono);
+        font-size: 11px;
+        letter-spacing: 0.5px;
+        color: rgba(255, 255, 255, 0.85);
+        background: rgba(255, 255, 255, 0.07);
+        border: 1px solid rgba(255, 255, 255, 0.35);
+        border-radius: var(--r-chip);
+        padding: 8px 12px;
+        margin-bottom: 14px;
+        text-align: left;
+    }
+
     @media (max-width: 560px) {
         .row { max-width: 92%; }
         .avatar { display: none; }
@@ -517,7 +592,13 @@
             CipherChat
             <span class="mono">Fernet&nbsp;·&nbsp;WS</span>
         </div>
-        <div class="conn"><span class="dot" id="status-dot"></span><span id="status-text">offline</span></div>
+        <div class="top-right">
+            <button class="room-chip hidden" id="roomChip" onclick="copyRoom()" title="Copy invite link">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                #<span id="roomCode"></span>
+            </button>
+            <div class="conn"><span class="dot" id="status-dot"></span><span id="status-text">offline</span></div>
+        </div>
     </header>
 
     <main id="messages">
@@ -545,11 +626,24 @@
             </div>
             <div class="gate-eyebrow">Encrypted Relay · Online</div>
             <h1>Instant message.<br><span>No compromise.</span></h1>
-            <p>Pick an alias to enter the room. Real-time text, photos, video, audio &amp; documents — routed through Fernet-encrypted payloads.</p>
-            <div class="gate-row">
-                <input type="text" id="username" placeholder="Alias" maxlength="32" autocomplete="off">
-                <button class="join-btn" onclick="connectChat()">Enter</button>
+            <p>Start a room or join one by code. Real-time text, photos, video, audio &amp; documents — routed through Fernet-encrypted payloads.</p>
+            <div class="gate-field">
+                <label for="roomcode">Room code</label>
+                <div class="gate-row">
+                    <input type="text" id="roomcode" class="room-input" placeholder="e.g. K7M2QX" maxlength="12" autocomplete="off" spellcheck="false">
+                    <button type="button" class="gen-btn" onclick="generateRoom()" title="Generate a room code">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8.5" cy="8.5" r="1.3" fill="currentColor"/><circle cx="15.5" cy="15.5" r="1.3" fill="currentColor"/><circle cx="15.5" cy="8.5" r="1.3" fill="currentColor"/><circle cx="8.5" cy="15.5" r="1.3" fill="currentColor"/></svg>
+                    </button>
+                </div>
             </div>
+            <div class="gate-field">
+                <label for="username">Your alias</label>
+                <div class="gate-row">
+                    <input type="text" id="username" placeholder="e.g. Astra" maxlength="32" autocomplete="off">
+                    <button class="join-btn" onclick="connectChat()">Enter</button>
+                </div>
+            </div>
+            <div class="gate-error hidden" id="gateError"></div>
             <div class="gate-meta">WebSockets · FastAPI · Zero tracking</div>
         </div>
     </div>
@@ -563,6 +657,8 @@
 
     let ws = null;
     let myName = "";
+    let myRoom = "";
+    const ROOM_RE = /^[A-Z0-9-]{3,12}$/;
 
     const $ = (id) => document.getElementById(id);
 
@@ -571,17 +667,59 @@
         $("status-text").innerText = label;
     }
 
+    // Unambiguous chars (no O/0, I/1) for shareable codes
+    function generateRoom() {
+        const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+        let code = "";
+        for (let i = 0; i < 6; i++) code += alphabet[Math.floor(Math.random() * alphabet.length)];
+        const el = $("roomcode");
+        el.value = code;
+        el.focus();
+    }
+
+    function copyRoom() {
+        const link = `${location.origin}${location.pathname}?room=${myRoom}`;
+        navigator.clipboard.writeText(link).then(() => {
+            const chip = $("roomChip");
+            chip.classList.add("copied");
+            setTimeout(() => chip.classList.remove("copied"), 1200);
+        });
+    }
+
+    function showGateError(msg) {
+        const el = $("gateError");
+        el.textContent = msg;
+        el.classList.remove("hidden");
+    }
+    function hideGateError() {
+        $("gateError").classList.add("hidden");
+    }
+
     function connectChat() {
         const username = $("username").value.trim();
-        if (!username) { $("username").focus(); return; }
+        const room = $("roomcode").value.trim().toUpperCase();
+        if (!ROOM_RE.test(room)) {
+            $("roomcode").focus();
+            showGateError("Room code must be 3–12 letters, digits or dashes.");
+            return;
+        }
+        if (!username) {
+            $("username").focus();
+            showGateError("Please enter an alias.");
+            return;
+        }
+        hideGateError();
         myName = username;
+        myRoom = room;
 
         const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-        const wsUrl = `${protocol}//${window.location.host}/ws/${encodeURIComponent(username)}`;
+        const wsUrl = `${protocol}//${window.location.host}/ws/${encodeURIComponent(room)}/${encodeURIComponent(username)}`;
         ws = new WebSocket(wsUrl);
 
         ws.onopen = () => {
             $("gate").classList.add("hidden");
+            $("roomCode").innerText = room;
+            $("roomChip").classList.remove("hidden");
             $("messageText").disabled = false;
             $("sendBtn").disabled = false;
             $("attachBtn").disabled = false;
@@ -601,6 +739,7 @@
             $("messageText").disabled = true;
             $("sendBtn").disabled = true;
             $("attachBtn").disabled = true;
+            $("roomChip").classList.add("hidden");
             pushSystem("Connection lost — reload the page to rejoin.", true);
         };
 
@@ -803,6 +942,22 @@
     $("username").addEventListener("keydown", (e) => {
         if (e.key === "Enter") connectChat();
     });
+    $("roomcode").addEventListener("keydown", (e) => {
+        if (e.key === "Enter") { ($("username").value.trim() ? connectChat : (() => $("username").focus()))(); }
+    });
+    $("roomcode").addEventListener("input", hideGateError);
+
+    // Prefill room from ?room=CODE (shareable invite link) or auto-generate one
+    (function initRoom() {
+        const param = new URLSearchParams(location.search).get("room");
+        if (param && ROOM_RE.test(param.toUpperCase())) {
+            $("roomcode").value = param.toUpperCase();
+            $("username").focus();
+        } else {
+            generateRoom();
+            $("username").focus();
+        }
+    })();
 
     $("attachBtn").addEventListener("click", () => $("fileInput").click());
     $("fileInput").addEventListener("change", (e) => {

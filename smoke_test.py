@@ -7,28 +7,47 @@ import websockets
 
 WS_URL = "ws://127.0.0.1:8000/ws/"
 HTTP_URL = "http://127.0.0.1:8000"
+ROOM_A = "TESTROOM"
+ROOM_B = "OTHER"
 
 
 async def recv_json(ws, timeout=5):
     return json.loads(await asyncio.wait_for(ws.recv(), timeout))
 
 
+async def expect_silence(ws, timeout=1.0):
+    """Return True if nothing arrives within timeout (used for room isolation)."""
+    try:
+        await asyncio.wait_for(ws.recv(), timeout)
+        return False
+    except asyncio.TimeoutError:
+        return True
+
+
 async def main():
-    alice = await websockets.connect(WS_URL + "alice")
-    bob = await websockets.connect(WS_URL + "bob")
+    alice = await websockets.connect(f"{WS_URL}{ROOM_A}/alice")
+    bob = await websockets.connect(f"{WS_URL}{ROOM_A}/bob")
+    carol = await websockets.connect(f"{WS_URL}{ROOM_B}/carol")
 
-    # both see alice join; drain system messages
-    for ws in (alice, bob):
-        await recv_json(ws)
+    # Drain join system messages: alice sees her own + bob's join; bob/carol their own.
+    await recv_json(alice)
+    await recv_json(alice)
+    await recv_json(bob)
+    await recv_json(carol)
 
-    # --- chat message ---
+    # --- chat routes to same room only ---
     await alice.send(json.dumps({"type": "chat", "text": "hello encrypted world"}))
     msg = await recv_json(bob)
     assert msg["type"] == "chat" and msg["sender"] == "alice", msg
     assert msg["text"] == "hello encrypted world", msg
-    print("[OK] chat:", msg["text"])
+    assert msg["room"] == ROOM_A, msg
+    print("[OK] chat delivered in-room:", msg["text"])
 
-    # --- file transfer (small fake png, streamed to disk + fetched over HTTPS) ---
+    # --- room isolation: carol (other room) must NOT receive it ---
+    assert await expect_silence(carol), "carol leaked a message from another room"
+    print("[OK] room isolation: other room received nothing")
+
+    # --- file transfer (streamed to disk + fetched over HTTPS) ---
     payload = b"\x89PNG\r\n\x1a\n" + b"x" * 1000
     await alice.send(json.dumps({"type": "file_start", "name": "pic.png", "mime": "image/png", "size": len(payload)}))
     note = await recv_json(bob)
@@ -54,13 +73,19 @@ async def main():
         assert e.code == 404, e.code
         print("[OK] unknown file id returns 404")
 
-    # --- oversized rejection (limit is 2 GB) ---
-    carol = await websockets.connect(WS_URL + "carol")
-    await recv_json(carol)  # join system msg
+    # --- oversized rejection (limit is 2 GB) — read from carol's clean socket ---
     await carol.send(json.dumps({"type": "file_start", "name": "huge.bin", "mime": "application/octet-stream", "size": 3 * 1024 * 1024 * 1024}))
     rej = await recv_json(carol)
     assert rej["type"] == "system" and "rejected" in rej["text"], rej
     print("[OK] oversized rejected:", rej["text"])
+
+    # --- invalid room code is rejected at handshake ---
+    try:
+        bad = await websockets.connect(f"{WS_URL}no!/x")
+        await bad.recv()
+        raise AssertionError("expected invalid room to be rejected")
+    except Exception:
+        print("[OK] invalid room code rejected at handshake")
 
     await alice.close()
     await bob.close()

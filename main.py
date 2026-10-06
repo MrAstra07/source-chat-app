@@ -7,6 +7,7 @@ from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 import json
 import os
+import re
 import uuid
 from pathlib import Path
 from urllib.parse import quote
@@ -23,6 +24,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 def _load_fernet_key() -> bytes:
     """Use FERNET_KEY from env if it is a valid key; otherwise generate one."""
     env_key = os.environ.get("FERNET_KEY", "").strip().encode()
@@ -31,7 +33,8 @@ def _load_fernet_key() -> bytes:
             Fernet(env_key)
             return env_key
         except Exception:
-            pass  # invalid key (e.g. Render's random generateValue) -> fall through
+            # invalid key (e.g. Render's random generateValue) -> fall through
+            pass
     return Fernet.generate_key()
 
 
@@ -48,6 +51,9 @@ UPLOAD_DIR.mkdir(exist_ok=True)
 # file_id -> {path, key, iv, name, mime, size, sender}
 STORED_FILES: dict[str, dict] = {}
 
+# Room codes: 3-12 chars, letters/digits/dash (normalized to uppercase)
+ROOM_RE = re.compile(r"^[A-Z0-9-]{3,12}$")
+
 os.makedirs("templates", exist_ok=True)
 templates = Jinja2Templates(directory="templates")
 
@@ -58,18 +64,27 @@ def now_iso() -> str:
 
 class ConnectionManager:
     def __init__(self):
-        self.active_connections: list[WebSocket] = []
+        # room code -> list of websockets
+        self.rooms: dict[str, list[WebSocket]] = {}
+        # websocket id -> room code (for cleanup on disconnect)
+        self.ws_room: dict[int, str] = {}
         # In-flight uploads keyed by websocket id:
         # {name, mime, size, received, tmp_path, fh}
         self.uploads: dict[int, dict] = {}
 
-    async def connect(self, websocket: WebSocket):
+    async def connect(self, websocket: WebSocket, room: str):
         await websocket.accept()
-        self.active_connections.append(websocket)
+        self.rooms.setdefault(room, []).append(websocket)
+        self.ws_room[id(websocket)] = room
 
     def disconnect(self, websocket: WebSocket):
-        if websocket in self.active_connections:
-            self.active_connections.remove(websocket)
+        room = self.ws_room.pop(id(websocket), None)
+        if room:
+            conns = self.rooms.get(room, [])
+            if websocket in conns:
+                conns.remove(websocket)
+            if not conns:
+                self.rooms.pop(room, None)  # empty rooms are destroyed
         upload = self.uploads.pop(id(websocket), None)
         if upload:
             try:
@@ -78,9 +93,12 @@ class ConnectionManager:
                 pass
             upload["tmp_path"].unlink(missing_ok=True)
 
-    async def broadcast(self, payload: dict):
+    def member_count(self, room: str) -> int:
+        return len(self.rooms.get(room, []))
+
+    async def broadcast(self, room: str, payload: dict):
         text = json.dumps(payload)
-        for connection in list(self.active_connections):
+        for connection in list(self.rooms.get(room, [])):
             try:
                 await connection.send_text(text)
             except Exception:
@@ -97,7 +115,7 @@ async def get_chat_page(request: Request):
     return templates.TemplateResponse(request, "index.html")
 
 
-async def handle_text(websocket: WebSocket, username: str, raw: str):
+async def handle_text(websocket: WebSocket, username: str, room: str, raw: str):
     try:
         data = json.loads(raw)
     except json.JSONDecodeError:
@@ -114,7 +132,8 @@ async def handle_text(websocket: WebSocket, username: str, raw: str):
         encrypted = cipher_suite.encrypt(text.encode("utf-8"))
         decrypted = cipher_suite.decrypt(encrypted).decode("utf-8")
         await manager.broadcast(
-            {"type": "chat", "sender": username,
+            room,
+            {"type": "chat", "sender": username, "room": room,
                 "text": decrypted, "ts": now_iso()}
         )
 
@@ -142,9 +161,10 @@ async def handle_text(websocket: WebSocket, username: str, raw: str):
             "tmp_path": tmp_path,
             "fh": open(tmp_path, "wb"),
         }
-        others = [c for c in manager.active_connections if c is not websocket]
+        others = [c for c in manager.rooms.get(room, []) if c is not websocket]
         if others:
             await manager.broadcast(
+                room,
                 {
                     "type": "file_start",
                     "sender": username,
@@ -183,7 +203,7 @@ def finalize_upload(upload: dict) -> str:
     return file_id
 
 
-async def handle_chunk(websocket: WebSocket, username: str, chunk: bytes):
+async def handle_chunk(websocket: WebSocket, username: str, room: str, chunk: bytes):
     upload = manager.uploads.get(id(websocket))
     if not upload:
         return  # binary frame without a matching file_start -> ignore
@@ -212,9 +232,11 @@ async def handle_chunk(websocket: WebSocket, username: str, chunk: bytes):
 
     # Tiny metadata broadcast — the file itself is fetched over HTTPS
     await manager.broadcast(
+        room,
         {
             "type": "file",
             "sender": username,
+            "room": room,
             "name": upload["name"],
             "mime": upload["mime"],
             "size": upload["size"],
@@ -247,20 +269,33 @@ async def download_file(file_id: str, dl: int = 0):
     return StreamingResponse(stream(), media_type=meta["mime"] or "application/octet-stream", headers=headers)
 
 
-@app.websocket("/ws/{username}")
-async def websocket_endpoint(websocket: WebSocket, username: str):
+@app.websocket("/ws/{room}/{username}")
+async def websocket_endpoint(websocket: WebSocket, room: str, username: str):
+    room = room.strip().upper()[:12]
+    if not ROOM_RE.match(room):
+        # Invalid room code -> reject before accepting
+        await websocket.close(code=1008)
+        return
     username = username.strip()[:32] or "anon"
-    await manager.connect(websocket)
-    await manager.broadcast({"type": "system", "text": f"{username} joined the chat", "ts": now_iso()})
+    await manager.connect(websocket, room)
+    await manager.broadcast(
+        room,
+        {"type": "system", "room": room,
+            "text": f"{username} joined the chat", "ts": now_iso()},
+    )
     try:
         while True:
             message = await websocket.receive()
             if message["type"] == "websocket.disconnect":
                 raise WebSocketDisconnect(message.get("code", 1000))
             if message.get("text") is not None:
-                await handle_text(websocket, username, message["text"])
+                await handle_text(websocket, username, room, message["text"])
             elif message.get("bytes") is not None:
-                await handle_chunk(websocket, username, message["bytes"])
+                await handle_chunk(websocket, username, room, message["bytes"])
     except WebSocketDisconnect:
         manager.disconnect(websocket)
-        await manager.broadcast({"type": "system", "text": f"{username} left the chat", "ts": now_iso()})
+        await manager.broadcast(
+            room,
+            {"type": "system", "room": room,
+                "text": f"{username} left the chat", "ts": now_iso()},
+        )
