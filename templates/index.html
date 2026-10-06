@@ -1,0 +1,943 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CipherChat — Instant Message. No Compromise.</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+    /* ============ BitChord-derived design tokens ============ */
+    :root {
+        --canvas: #000;
+        --surface: #0d0d0f;
+        --surface-2: #1c1c1e;
+        --line: #2c2c2e;
+        --fg: #fff;
+        --glass: rgba(255, 255, 255, 0.035);
+        --glass-strong: rgba(255, 255, 255, 0.07);
+        --hairline: 1px solid var(--line);
+        --r-card: 22px;
+        --r-pill: 9999px;
+        --r-chip: 8px;
+        --r-panel: 34px;
+        --ease-expo: cubic-bezier(0.16, 1, 0.3, 1);
+        --shadow-deep: 0 50px 100px -40px rgba(0, 0, 0, 0.9);
+        --glow-white: 0 0 8px 2px rgba(255, 255, 255, 0.35);
+        --font-display: "Plus Jakarta Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+        --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", monospace;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+        background:
+            radial-gradient(560px 420px at 12% -8%, rgba(255, 255, 255, 0.06), transparent 65%),
+            radial-gradient(480px 420px at 92% 108%, rgba(255, 255, 255, 0.045), transparent 65%),
+            var(--canvas);
+        color: var(--fg);
+        font-family: var(--font-display);
+        font-size: 15px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 24px 16px;
+        position: relative;
+    }
+    /* blueprint layer: box-grid + fine dot grid, slowly drifting, edge-faded */
+    body::before {
+        content: "";
+        position: fixed;
+        inset: -100px;
+        background:
+            radial-gradient(rgba(255, 255, 255, 0.07) 1px, transparent 1.5px),
+            linear-gradient(rgba(255, 255, 255, 0.05) 1px, transparent 1px),
+            linear-gradient(90deg, rgba(255, 255, 255, 0.05) 1px, transparent 1px);
+        background-size: 24px 24px, 96px 96px, 96px 96px;
+        animation: grid-drift 26s linear infinite;
+        -webkit-mask-image: radial-gradient(115% 95% at 50% 42%, #000 32%, transparent 82%);
+        mask-image: radial-gradient(115% 95% at 50% 42%, #000 32%, transparent 82%);
+        pointer-events: none;
+    }
+    @keyframes grid-drift {
+        /* 96px = one grid cell = 4 dot cells -> perfectly seamless loop */
+        to { transform: translate3d(96px, 96px, 0); }
+    }
+    @media (prefers-reduced-motion: reduce) {
+        body::before { animation: none; }
+    }
+    body::after {
+        content: "";
+        position: fixed;
+        inset: 0;
+        background: radial-gradient(125% 105% at 50% 0, transparent 62%, rgba(0, 0, 0, 0.72) 100%);
+        pointer-events: none;
+    }
+
+    /* ---------- Shell ---------- */
+    .shell {
+        width: min(760px, 100%);
+        height: min(88vh, 820px);
+        background: var(--glass);
+        backdrop-filter: blur(24px);
+        -webkit-backdrop-filter: blur(24px);
+        border: var(--hairline);
+        border-radius: var(--r-card);
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+        box-shadow: var(--shadow-deep);
+        position: relative;
+        z-index: 1;
+    }
+
+    .topbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 16px 20px;
+        border-bottom: var(--hairline);
+        background: rgba(13, 13, 15, 0.6);
+    }
+    .brand {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        font-weight: 800;
+        font-size: 17px;
+        letter-spacing: -0.51px; /* -0.03em */
+        line-height: 1.02;
+    }
+    .brand svg { color: rgba(255, 255, 255, 0.85); }
+    .brand .mono {
+        font-family: var(--font-mono);
+        font-size: 10px;
+        font-weight: 400;
+        letter-spacing: 1.6px;
+        text-transform: uppercase;
+        color: rgba(255, 255, 255, 0.4);
+        border: var(--hairline);
+        border-radius: var(--r-chip);
+        padding: 4px 8px;
+        margin-left: 4px;
+    }
+    .conn {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 10px;
+        font-weight: 400;
+        letter-spacing: 1.5px;
+        text-transform: uppercase;
+        color: rgba(255, 255, 255, 0.35);
+        font-family: var(--font-mono);
+    }
+    .dot {
+        width: 7px; height: 7px;
+        border-radius: 50%;
+        background: rgba(255, 255, 255, 0.25);
+        transition: all .4s var(--ease-expo);
+    }
+    .dot.live { background: #fff; box-shadow: var(--glow-white); }
+
+    /* ---------- Messages ---------- */
+    #messages {
+        flex: 1;
+        overflow-y: auto;
+        padding: 22px 20px 10px;
+        display: flex;
+        flex-direction: column;
+        gap: 14px;
+        scrollbar-width: thin;
+        scrollbar-color: var(--line) transparent;
+    }
+    #messages::-webkit-scrollbar { width: 6px; }
+    #messages::-webkit-scrollbar-thumb { background: var(--line); border-radius: 3px; }
+
+    .row { display: flex; gap: 10px; max-width: 82%; align-items: flex-end; }
+    .row.self { align-self: flex-end; flex-direction: row-reverse; }
+
+    .avatar {
+        width: 30px; height: 30px;
+        flex: 0 0 30px;
+        border-radius: var(--r-chip);
+        display: grid;
+        place-items: center;
+        font-size: 12px;
+        font-weight: 700;
+        color: rgba(255, 255, 255, 0.7);
+        background: var(--glass-strong);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+    }
+    .row.self .avatar {
+        background: #fff;
+        color: #000;
+        border-color: transparent;
+    }
+
+    .bubble {
+        background: var(--glass);
+        border: var(--hairline);
+        border-radius: var(--r-card);
+        padding: 12px 16px;
+        font-size: 14.5px;
+        line-height: 1.625;
+        color: rgba(255, 255, 255, 0.85);
+        word-break: break-word;
+        overflow-wrap: anywhere;
+        transition: transform .5s var(--ease-expo);
+    }
+    .row.self .bubble {
+        background: var(--glass-strong);
+        border-color: rgba(255, 255, 255, 0.2);
+        color: #fff;
+    }
+    .meta {
+        display: flex;
+        gap: 8px;
+        font-family: var(--font-mono);
+        font-size: 10px;
+        letter-spacing: 1.26px;
+        text-transform: uppercase;
+        color: rgba(255, 255, 255, 0.35);
+        margin-bottom: 6px;
+    }
+    .meta .name { color: rgba(255, 255, 255, 0.6); font-weight: 500; }
+    .row.self .meta .name { color: rgba(255, 255, 255, 0.75); }
+
+    .sys {
+        align-self: center;
+        font-size: 10px;
+        font-family: var(--font-mono);
+        letter-spacing: 1.26px;
+        text-transform: uppercase;
+        color: rgba(255, 255, 255, 0.3);
+        background: var(--glass);
+        border: 1px solid rgba(255, 255, 255, 0.06);
+        padding: 5px 14px;
+        border-radius: var(--r-pill);
+    }
+    .sys.warn {
+        color: rgba(255, 255, 255, 0.75);
+        border-color: rgba(255, 255, 255, 0.35);
+        background: rgba(255, 255, 255, 0.07);
+    }
+
+    /* ---------- File cards ---------- */
+    .file-card { min-width: 250px; max-width: 340px; }
+    .file-head {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 8px;
+    }
+    .file-icon {
+        width: 36px; height: 36px;
+        flex: 0 0 36px;
+        border-radius: var(--r-chip);
+        background: var(--glass-strong);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        color: rgba(255, 255, 255, 0.85);
+        display: grid;
+        place-items: center;
+    }
+    .file-name {
+        font-size: 13.5px;
+        font-weight: 600;
+        letter-spacing: -0.2px;
+        color: #fff;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+    .file-size {
+        font-size: 10px;
+        letter-spacing: 1.26px;
+        text-transform: uppercase;
+        color: rgba(255, 255, 255, 0.35);
+        font-family: var(--font-mono);
+    }
+    .file-preview { margin: 8px 0; border-radius: 12px; overflow: hidden; border: var(--hairline); }
+    .file-preview img, .file-preview video {
+        display: block;
+        width: 100%;
+        max-height: 260px;
+        object-fit: contain;
+        background: var(--surface);
+    }
+    .file-preview audio { width: 100%; }
+    .dl-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        margin-top: 10px;
+        font-family: var(--font-display);
+        font-size: 12.5px;
+        font-weight: 600;
+        color: #000;
+        background: #fff;
+        border: none;
+        border-radius: var(--r-pill);
+        padding: 8px 16px;
+        cursor: pointer;
+        text-decoration: none;
+        transition: transform .5s var(--ease-expo), box-shadow .5s var(--ease-expo);
+    }
+    .dl-btn:hover { transform: translateY(-2px); box-shadow: var(--glow-white); }
+
+    .progress {
+        height: 3px;
+        background: rgba(255, 255, 255, 0.07);
+        border-radius: 2px;
+        margin-top: 10px;
+        overflow: hidden;
+    }
+    .progress > i {
+        display: block;
+        height: 100%;
+        width: 0;
+        background: #fff;
+        transition: width .2s linear;
+    }
+
+    .empty-hint {
+        margin: auto;
+        text-align: center;
+        color: rgba(255, 255, 255, 0.3);
+        font-size: 13px;
+        line-height: 1.9;
+        font-family: var(--font-mono);
+        letter-spacing: 1.2px;
+        text-transform: uppercase;
+    }
+    .empty-hint .lock-big {
+        font-size: 30px;
+        display: block;
+        margin-bottom: 10px;
+        filter: grayscale(1) brightness(1.6);
+    }
+
+    /* ---------- Composer ---------- */
+    .composer {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 14px 16px;
+        border-top: var(--hairline);
+        background: rgba(13, 13, 15, 0.6);
+    }
+    .icon-btn {
+        width: 42px; height: 42px;
+        flex: 0 0 42px;
+        border-radius: var(--r-pill);
+        border: var(--hairline);
+        background: var(--glass);
+        color: rgba(255, 255, 255, 0.85);
+        display: grid;
+        place-items: center;
+        cursor: pointer;
+        transition: transform .5s var(--ease-expo), background .3s, border-color .3s;
+    }
+    .icon-btn:hover { background: var(--glass-strong); border-color: rgba(255, 255, 255, 0.35); transform: translateY(-2px); }
+    .icon-btn:disabled { opacity: 0.25; cursor: not-allowed; transform: none; }
+
+    #messageText {
+        flex: 1;
+        height: 42px;
+        background: var(--glass);
+        border: var(--hairline);
+        border-radius: var(--r-pill);
+        color: #fff;
+        font-family: var(--font-display);
+        font-size: 14px;
+        padding: 0 18px;
+        outline: none;
+        transition: border-color .3s;
+    }
+    #messageText:focus { border-color: rgba(255, 255, 255, 0.45); }
+    #messageText::placeholder { color: rgba(255, 255, 255, 0.25); }
+
+    .send-btn {
+        width: 46px; height: 42px;
+        flex: 0 0 46px;
+        border: none;
+        border-radius: var(--r-pill);
+        background: #fff;
+        color: #000;
+        display: grid;
+        place-items: center;
+        cursor: pointer;
+        transition: transform .5s var(--ease-expo), box-shadow .5s var(--ease-expo);
+    }
+    .send-btn:hover { transform: translateY(-2px); box-shadow: var(--glow-white); }
+    .send-btn:disabled { opacity: 0.25; cursor: not-allowed; transform: none; box-shadow: none; }
+
+    /* ---------- Join gate ---------- */
+    #gate {
+        position: absolute;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.75);
+        backdrop-filter: blur(16px);
+        -webkit-backdrop-filter: blur(16px);
+        display: grid;
+        place-items: center;
+        z-index: 5;
+    }
+    .gate-card {
+        width: min(400px, 88%);
+        background: var(--surface);
+        border: var(--hairline);
+        border-radius: var(--r-panel);
+        padding: 40px 34px;
+        text-align: center;
+        box-shadow: var(--shadow-deep);
+    }
+    .gate-eyebrow {
+        font-family: var(--font-mono);
+        font-size: 10px;
+        letter-spacing: 1.6px;
+        text-transform: uppercase;
+        color: rgba(255, 255, 255, 0.4);
+        margin-bottom: 18px;
+    }
+    .gate-card h1 {
+        font-size: 30px;
+        font-weight: 800;
+        letter-spacing: -1.35px; /* -0.045em */
+        line-height: 1.02;
+        margin-bottom: 10px;
+    }
+    .gate-card h1 span { color: rgba(255, 255, 255, 0.45); }
+    .gate-card p {
+        font-size: 13.5px;
+        color: rgba(255, 255, 255, 0.5);
+        line-height: 1.625;
+        margin-bottom: 26px;
+    }
+    .gate-lock {
+        width: 52px; height: 52px;
+        margin: 0 auto 16px;
+        border-radius: var(--r-card);
+        background: var(--glass-strong);
+        border: 1px solid rgba(255, 255, 255, 0.15);
+        display: grid;
+        place-items: center;
+        color: #fff;
+        box-shadow: var(--glow-white);
+    }
+    .gate-row { display: flex; gap: 10px; }
+    #username {
+        flex: 1;
+        height: 46px;
+        background: rgba(255, 255, 255, 0.035);
+        border: 1px solid rgba(255, 255, 255, 0.2);
+        border-radius: var(--r-pill);
+        color: #fff;
+        font-family: var(--font-display);
+        font-size: 14px;
+        padding: 0 18px;
+        outline: none;
+    }
+    #username:focus { border-color: rgba(255, 255, 255, 0.45); }
+    #username::placeholder { color: rgba(255, 255, 255, 0.25); }
+    .join-btn {
+        height: 46px;
+        padding: 0 22px;
+        border: none;
+        border-radius: var(--r-pill);
+        background: #fff;
+        color: #000;
+        font-family: var(--font-display);
+        font-weight: 600;
+        font-size: 14px;
+        cursor: pointer;
+        transition: transform .5s var(--ease-expo), box-shadow .5s var(--ease-expo);
+    }
+    .join-btn:hover { transform: translateY(-2px); box-shadow: var(--glow-white); }
+    .gate-meta {
+        margin-top: 18px;
+        font-family: var(--font-mono);
+        font-size: 10px;
+        letter-spacing: 1.54px;
+        text-transform: uppercase;
+        color: rgba(255, 255, 255, 0.3);
+    }
+
+    /* ---------- Drag & drop ---------- */
+    #dropzone {
+        position: absolute;
+        inset: 0;
+        z-index: 6;
+        display: none;
+        place-items: center;
+        background: rgba(0, 0, 0, 0.8);
+        backdrop-filter: blur(8px);
+        -webkit-backdrop-filter: blur(8px);
+    }
+    #dropzone.on { display: grid; }
+    #dropzone .dz-box {
+        border: 1px dashed rgba(255, 255, 255, 0.45);
+        border-radius: var(--r-card);
+        padding: 34px 48px;
+        color: #fff;
+        font-family: var(--font-mono);
+        font-weight: 500;
+        font-size: 11px;
+        letter-spacing: 1.6px;
+        text-transform: uppercase;
+        background: var(--glass);
+        box-shadow: var(--glow-white);
+    }
+
+    .hidden { display: none !important; }
+
+    /* live packet-flow layer riding the grid */
+    #gridfx {
+        position: fixed;
+        inset: 0;
+        z-index: 0;
+        pointer-events: none;
+    }
+
+    @media (max-width: 560px) {
+        .row { max-width: 92%; }
+        .avatar { display: none; }
+        .gate-card { padding: 32px 22px; }
+    }
+</style>
+</head>
+<body>
+
+<canvas id="gridfx"></canvas>
+
+<div class="shell">
+    <header class="topbar">
+        <div class="brand">
+            <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+            CipherChat
+            <span class="mono">Fernet&nbsp;·&nbsp;WS</span>
+        </div>
+        <div class="conn"><span class="dot" id="status-dot"></span><span id="status-text">offline</span></div>
+    </header>
+
+    <main id="messages">
+        <div class="empty-hint" id="empty-hint">
+            <span class="lock-big">🔐</span>
+            messages &amp; files travel through<br>an encrypted server payload channel
+        </div>
+    </main>
+
+    <footer class="composer">
+        <button class="icon-btn" id="attachBtn" title="Send a file" disabled>
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+        </button>
+        <input type="file" id="fileInput" class="hidden">
+        <input type="text" id="messageText" placeholder="Type a message…" autocomplete="off" disabled>
+        <button class="send-btn" id="sendBtn" title="Send" disabled>
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></svg>
+        </button>
+    </footer>
+
+    <div id="gate">
+        <div class="gate-card">
+            <div class="gate-lock">
+                <svg width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+            </div>
+            <div class="gate-eyebrow">Encrypted Relay · Online</div>
+            <h1>Instant message.<br><span>No compromise.</span></h1>
+            <p>Pick an alias to enter the room. Real-time text, photos, video, audio &amp; documents — routed through Fernet-encrypted payloads.</p>
+            <div class="gate-row">
+                <input type="text" id="username" placeholder="Alias" maxlength="32" autocomplete="off">
+                <button class="join-btn" onclick="connectChat()">Enter</button>
+            </div>
+            <div class="gate-meta">WebSockets · FastAPI · Zero tracking</div>
+        </div>
+    </div>
+
+    <div id="dropzone"><div class="dz-box">Drop file to send</div></div>
+</div>
+
+<script>
+    const CHUNK_SIZE = 256 * 1024;      // 256 KB binary frames
+    const MAX_FILE   = 2 * 1024 * 1024 * 1024; // 2 GB, keep in sync with backend
+
+    let ws = null;
+    let myName = "";
+
+    const $ = (id) => document.getElementById(id);
+
+    function setStatus(live, label) {
+        $("status-dot").className = "dot" + (live ? " live" : "");
+        $("status-text").innerText = label;
+    }
+
+    function connectChat() {
+        const username = $("username").value.trim();
+        if (!username) { $("username").focus(); return; }
+        myName = username;
+
+        const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+        const wsUrl = `${protocol}//${window.location.host}/ws/${encodeURIComponent(username)}`;
+        ws = new WebSocket(wsUrl);
+
+        ws.onopen = () => {
+            $("gate").classList.add("hidden");
+            $("messageText").disabled = false;
+            $("sendBtn").disabled = false;
+            $("attachBtn").disabled = false;
+            $("messageText").focus();
+            setStatus(true, "encrypted · live");
+        };
+
+        ws.onmessage = (event) => {
+            let data;
+            try { data = JSON.parse(event.data); }
+            catch { data = { type: "chat", sender: "?", text: event.data, ts: new Date().toISOString() }; }
+            render(data);
+        };
+
+        ws.onclose = () => {
+            setStatus(false, "disconnected");
+            $("messageText").disabled = true;
+            $("sendBtn").disabled = true;
+            $("attachBtn").disabled = true;
+            pushSystem("Connection lost — reload the page to rejoin.", true);
+        };
+
+        ws.onerror = () => console.error("WebSocket error");
+    }
+
+    /* ---------- rendering ---------- */
+
+    function esc(s) {
+        const d = document.createElement("span");
+        d.textContent = s;
+        return d.innerHTML;
+    }
+
+    function fmtTime(iso) {
+        try { return new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }); }
+        catch { return ""; }
+    }
+
+    function fmtBytes(n) {
+        if (n < 1024) return n + " B";
+        if (n < 1048576) return (n / 1024).toFixed(1) + " KB";
+        if (n < 1073741824) return (n / 1048576).toFixed(1) + " MB";
+        return (n / 1073741824).toFixed(2) + " GB";
+    }
+
+    function clearHint() { const h = $("empty-hint"); if (h) h.remove(); }
+
+    function rowShell(sender, self) {
+        const row = document.createElement("div");
+        row.className = "row" + (self ? " self" : "");
+        const av = document.createElement("div");
+        av.className = "avatar";
+        av.textContent = (sender || "?").charAt(0).toUpperCase();
+        const bubble = document.createElement("div");
+        bubble.className = "bubble";
+        const meta = document.createElement("div");
+        meta.className = "meta";
+        meta.innerHTML = `<span class="name">${esc(sender)}</span><span>${fmtTime(new Date().toISOString())}</span>`;
+        bubble.appendChild(meta);
+        row.append(av, bubble);
+        $("messages").appendChild(row);
+        return bubble;
+    }
+
+    function render(data) {
+        if (data.type === "system") { pushSystem(data.text); return; }
+
+        if (data.type === "file_start") {
+            if (data.sender === myName) return;
+            pushSystem(`${data.sender} is sending “${data.name}” (${fmtBytes(data.size)})…`);
+            return;
+        }
+
+        if (data.type === "chat") {
+            if (data.sender === myName && !ws) return; // own echo pre-open, ignore
+            const bubble = rowShell(data.sender, data.sender === myName);
+            const body = document.createElement("div");
+            body.textContent = data.text;
+            bubble.appendChild(body);
+            scrollDown();
+            return;
+        }
+
+        if (data.type === "file") { renderFile(data); return; }
+    }
+
+    function pushSystem(text, warn = false) {
+        clearHint();
+        const chip = document.createElement("div");
+        chip.className = "sys" + (warn ? " warn" : "");
+        chip.textContent = text;
+        $("messages").appendChild(chip);
+        scrollDown();
+    }
+
+    function renderFile(msg) {
+        clearHint();
+        const self = msg.sender === myName;
+        const bubble = rowShell(msg.sender, self);
+        bubble.classList.add("file-card");
+
+        // File lives on the server; the browser streams it (AES-decrypted server-side)
+        const url = msg.url;
+
+        const head = document.createElement("div");
+        head.className = "file-head";
+        head.innerHTML = `
+            <div class="file-icon">${fileIcon(msg.mime)}</div>
+            <div style="min-width:0">
+                <div class="file-name" title="${esc(msg.name)}">${esc(msg.name)}</div>
+                <div class="file-size">${fmtBytes(msg.size)}</div>
+            </div>`;
+        bubble.appendChild(head);
+
+        const kind = mediaKind(msg.mime);
+        if (kind) {
+            const prev = document.createElement("div");
+            prev.className = "file-preview";
+            if (kind === "image")      prev.innerHTML = `<img src="${url}" alt="${esc(msg.name)}">`;
+            else if (kind === "video") prev.innerHTML = `<video src="${url}" controls preload="metadata"></video>`;
+            else if (kind === "audio") prev.innerHTML = `<audio src="${url}" controls preload="metadata"></audio>`;
+            bubble.appendChild(prev);
+        }
+
+        const dl = document.createElement("a");
+        dl.className = "dl-btn";
+        dl.href = msg.url + "?dl=1";
+        dl.download = msg.name;
+        dl.innerHTML = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> Download`;
+        bubble.appendChild(dl);
+        scrollDown();
+    }
+
+    function mediaKind(mime) {
+        if (!mime) return null;
+        if (mime.startsWith("image/")) return "image";
+        if (mime.startsWith("video/")) return "video";
+        if (mime.startsWith("audio/")) return "audio";
+        return null;
+    }
+
+    function fileIcon(mime) {
+        const kind = mediaKind(mime);
+        const svg = (paths) => `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${paths}</svg>`;
+        if (kind === "image") return svg('<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.09-3.09a2 2 0 0 0-2.82 0L6 21"/>');
+        if (kind === "video") return svg('<polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2"/>');
+        if (kind === "audio") return svg('<path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>');
+        return svg('<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/>');
+    }
+
+    function scrollDown() {
+        const m = $("messages");
+        m.scrollTop = m.scrollHeight;
+    }
+
+    /* ---------- sending ---------- */
+
+    function sendChat() {
+        const input = $("messageText");
+        const text = input.value.trim();
+        if (!text || !ws || ws.readyState !== WebSocket.OPEN) return;
+        ws.send(JSON.stringify({ type: "chat", text }));
+        input.value = "";
+        input.focus();
+    }
+
+    async function sendFile(file) {
+        if (!ws || ws.readyState !== WebSocket.OPEN) return;
+        if (file.size > MAX_FILE) {
+            pushSystem(`“${file.name}” is too large (max ${fmtBytes(MAX_FILE)}).`, true);
+            return;
+        }
+
+        // Progress bubble for the sender
+        const bubble = rowShell(myName, true);
+        bubble.classList.add("file-card");
+        const head = document.createElement("div");
+        head.className = "file-head";
+        head.innerHTML = `
+            <div class="file-icon">${fileIcon(file.type)}</div>
+            <div style="min-width:0">
+                <div class="file-name" title="${esc(file.name)}">${esc(file.name)}</div>
+                <div class="file-size">${fmtBytes(file.size)} · uploading…</div>
+            </div>`;
+        const bar = document.createElement("div");
+        bar.className = "progress";
+        bar.innerHTML = "<i></i>";
+        bubble.append(head, bar);
+        scrollDown();
+
+        ws.send(JSON.stringify({ type: "file_start", name: file.name, mime: file.type, size: file.size }));
+
+        const buf = await file.arrayBuffer();
+        const fill = bar.querySelector("i");
+        let offset = 0;
+        try {
+            while (offset < buf.byteLength) {
+                const end = Math.min(offset + CHUNK_SIZE, buf.byteLength);
+                ws.send(buf.slice(offset, end));
+                offset = end;
+                fill.style.width = ((offset / buf.byteLength) * 100).toFixed(1) + "%";
+                // back-pressure: pause while the browser socket buffer is heaping up
+                while (ws.bufferedAmount > 4 * 1024 * 1024) await new Promise((r) => setTimeout(r, 40));
+            }
+            head.querySelector(".file-size").textContent = fmtBytes(file.size) + " · sent, encrypted";
+        } catch (e) {
+            head.querySelector(".file-size").textContent = fmtBytes(file.size) + " · failed";
+            pushSystem(`Upload of “${file.name}” failed.`, true);
+        }
+        bubble.querySelector(".progress")?.remove();
+    }
+
+    /* ---------- wiring ---------- */
+
+    $("sendBtn").addEventListener("click", sendChat);
+    $("messageText").addEventListener("keydown", (e) => {
+        if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendChat(); }
+    });
+    $("username").addEventListener("keydown", (e) => {
+        if (e.key === "Enter") connectChat();
+    });
+
+    $("attachBtn").addEventListener("click", () => $("fileInput").click());
+    $("fileInput").addEventListener("change", (e) => {
+        const f = e.target.files[0];
+        if (f) sendFile(f);
+        e.target.value = "";
+    });
+
+    // Drag & drop onto the chat window
+    const shell = document.querySelector(".shell");
+    let dragDepth = 0;
+    shell.addEventListener("dragenter", (e) => {
+        e.preventDefault();
+        if (!ws || ws.readyState !== WebSocket.OPEN) return;
+        dragDepth++;
+        $("dropzone").classList.add("on");
+    });
+    shell.addEventListener("dragover", (e) => e.preventDefault());
+    shell.addEventListener("dragleave", (e) => {
+        e.preventDefault();
+        if (--dragDepth <= 0) { dragDepth = 0; $("dropzone").classList.remove("on"); }
+    });
+    shell.addEventListener("drop", (e) => {
+        e.preventDefault();
+        dragDepth = 0;
+        $("dropzone").classList.remove("on");
+        if (!ws || ws.readyState !== WebSocket.OPEN) return;
+        const f = e.dataTransfer.files[0];
+        if (f) sendFile(f);
+    });
+
+    /* ---------- live grid: packets travelling along the blueprint lines ---------- */
+    (() => {
+        if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+        const canvas = $("gridfx");
+        const ctx = canvas.getContext("2d");
+        const CELL = 96;        // must match the CSS grid cell size
+        const LOOP = 26000;     // must match the CSS grid-drift duration
+        const t0 = performance.now();
+        let W = 0, H = 0, dpr = 1;
+
+        function resize() {
+            dpr = window.devicePixelRatio || 1;
+            W = innerWidth; H = innerHeight;
+            canvas.width = W * dpr; canvas.height = H * dpr;
+            canvas.style.width = W + "px"; canvas.style.height = H + "px";
+            ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        }
+        addEventListener("resize", resize);
+        resize();
+
+        const packets = [];  // {x0, sy, horiz, pos, dist, speed}
+        const flashes = [];  // {x, y, born}
+
+        function spawn() {
+            const horiz = Math.random() < 0.5;
+            const col = Math.floor(Math.random() * (W / CELL)) - 1;  // grid-local intersection
+            const row = Math.floor(Math.random() * (H / CELL)) - 1;
+            const cells = 2 + Math.floor(Math.random() * 4);         // travel 2-5 cells
+            // keep the whole run on screen (use worst-case drift of +CELL)
+            if (horiz && (col + cells) * CELL > W - CELL || !horiz && (row + cells) * CELL > H - CELL) return;
+            packets.push({
+                x0: col * CELL,
+                sy: row * CELL,
+                horiz,
+                pos: 0,
+                dist: cells * CELL,
+                speed: 140 + Math.random() * 160,          // px per second
+            });
+        }
+
+        let last = t0;
+        function frame(now) {
+            const dt = Math.min(60, now - last);
+            last = now;
+            const t = now - t0;
+            const drift = (t % LOOP) / LOOP * CELL;  // phase-locked with CSS translate3d(96px,96px)
+
+            ctx.clearRect(0, 0, W, H);
+            ctx.save();
+            ctx.translate(drift, drift);             // draw everything in drifting grid space
+
+            if (Math.random() < dt / 750 && packets.length < 14) spawn();
+
+            // packets: fading tail + bright head
+            for (let i = packets.length - 1; i >= 0; i--) {
+                const p = packets[i];
+                p.pos += (p.speed * dt) / 1000;
+                const done = p.pos >= p.dist;
+                if (done) {
+                    flashes.push({ x: p.x0 + (p.horiz ? p.dist : 0), y: p.sy + (p.horiz ? 0 : p.dist), born: now });
+                    packets.splice(i, 1);
+                    continue;
+                }
+                const tailLen = Math.min(90, p.pos);
+                const hx = p.x0 + (p.horiz ? p.pos : 0);
+                const hy = p.sy + (p.horiz ? 0 : p.pos);
+                const tx = p.x0 + (p.horiz ? p.pos - tailLen : 0);
+                const ty = p.sy + (p.horiz ? 0 : p.pos - tailLen);
+
+                const g = ctx.createLinearGradient(tx, ty, hx, hy);
+                g.addColorStop(0, "rgba(255,255,255,0)");
+                g.addColorStop(1, "rgba(255,255,255,0.55)");
+                ctx.strokeStyle = g;
+                ctx.lineWidth = 1.5;
+                ctx.beginPath();
+                ctx.moveTo(tx, ty);
+                ctx.lineTo(hx, hy);
+                ctx.stroke();
+
+                ctx.shadowColor = "rgba(255,255,255,0.9)";
+                ctx.shadowBlur = 8;
+                ctx.fillStyle = "rgba(255,255,255,0.95)";
+                ctx.beginPath();
+                ctx.arc(hx, hy, 1.6, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.shadowBlur = 0;
+            }
+
+            // arrival flashes: expanding square outline on the intersection
+            for (let i = flashes.length - 1; i >= 0; i--) {
+                const f = flashes[i];
+                const age = (now - f.born) / 650;
+                if (age >= 1) { flashes.splice(i, 1); continue; }
+                const size = 3 + age * 16;
+                ctx.strokeStyle = `rgba(255,255,255,${(0.5 * (1 - age)).toFixed(3)})`;
+                ctx.lineWidth = 1;
+                ctx.strokeRect(f.x - size / 2, f.y - size / 2, size, size);
+            }
+
+            ctx.restore();
+            requestAnimationFrame(frame);
+        }
+        requestAnimationFrame(frame);
+    })();
+</script>
+</body>
+</html>
