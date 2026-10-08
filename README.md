@@ -1,6 +1,6 @@
 # 🔒 CipherChat — Real-Time Encrypted Chat with Large File Sharing
 
-> 5th Semester IT Project · FastAPI · WebSockets · Cryptography
+> FastAPI · WebSockets · Cryptography
 >
 > **Live demo:** https://cipherchat.onrender.com
 
